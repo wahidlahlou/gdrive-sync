@@ -469,12 +469,9 @@ rclone config show  # review first
 
 ## Contributing
 
-Pull requests welcome. If you're reporting a bug, please include:
+Pull requests welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide — how to fork, branch, test, and submit a PR.
 
-- Output of `./gdrive-sync.sh --version`
-- Output of `rclone version`
-- Your OS and version (`lsb_release -a`)
-- Relevant log lines from `~/gdrive-sync-<name>.log`
+To report a bug or request a feature, [open an issue](https://github.com/wahidlahlou/gdrive-sync/issues/new/choose).
 
 ---
 
