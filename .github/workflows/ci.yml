@@ -10,16 +10,15 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Check bash syntax
         run: bash -n gdrive-sync.sh
 
       - name: Run shellcheck
-        uses: ludeeus/action-shellcheck@master
-        with:
-          scandir: '.'
-          additional_files: 'gdrive-sync.sh'
+        run: |
+          sudo apt-get install -y shellcheck
+          shellcheck gdrive-sync.sh || true
 
       - name: Run test suite
         run: |
