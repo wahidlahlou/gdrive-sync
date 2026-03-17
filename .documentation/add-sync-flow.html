@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>gdrive-sync — Add New Sync Flow</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif;
+      background: #0d1117;
+      color: #c9d1d9;
+      padding: 2rem;
+      line-height: 1.6;
+    }
+    h1 { color: #58a6ff; margin-bottom: 0.5rem; font-size: 1.8rem; }
+    h2 { color: #58a6ff; margin: 2rem 0 1rem; font-size: 1.3rem; border-bottom: 1px solid #21262d; padding-bottom: 0.5rem; }
+    h3 { color: #79c0ff; margin: 1.5rem 0 0.5rem; font-size: 1.1rem; }
+    p { margin: 0.5rem 0; }
+    .subtitle { color: #8b949e; font-size: 0.95rem; margin-bottom: 2rem; }
+    .mermaid { background: #161b22; border-radius: 8px; padding: 1.5rem; margin: 1rem 0; overflow-x: auto; }
+    .terminal {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin: 0.75rem 0;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 0.85rem;
+      white-space: pre;
+      overflow-x: auto;
+      line-height: 1.5;
+    }
+    .ok { color: #3fb950; }
+    .err { color: #f85149; }
+    .warn { color: #d29922; }
+    .info { color: #58a6ff; }
+    .dim { color: #6e7681; }
+    .bold { color: #f0f6fc; font-weight: 600; }
+    .cyan { color: #39d2e0; }
+    .step-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+    .step-card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+    }
+    .step-card h4 { color: #79c0ff; margin-bottom: 0.5rem; font-size: 0.95rem; }
+    .step-card p { font-size: 0.9rem; }
+    .legend {
+      display: flex;
+      gap: 1.5rem;
+      margin: 1rem 0;
+      font-size: 0.85rem;
+    }
+    .legend span { display: flex; align-items: center; gap: 0.4rem; }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 1rem 0;
+      font-size: 0.9rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      border: 1px solid #30363d;
+    }
+    th { background: #161b22; color: #79c0ff; }
+    @media (max-width: 768px) {
+      .step-grid { grid-template-columns: 1fr; }
+      body { padding: 1rem; }
+    }
+  </style>
+</head>
+<body>
+
+<h1>gdrive-sync — "Add New Sync" Flow</h1>
+<p class="subtitle">PRD flowchart for <code>action_add()</code> — the interactive setup wizard</p>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2>Overview Flowchart</h2>
+
+<div class="mermaid">
+flowchart TD
+    START(["User selects 1 Add new sync"]) --> DRY{"Dry-run mode?"}
+    DRY -->|Yes| DRY_BANNER["Show DRY RUN banner"]
+    DRY -->|No| S1
+    DRY_BANNER --> S1
+
+    S1["Step 1 Dependencies\nCheck curl, rclone, inotifywait, systemd"]
+    S1 --> S1_OK{"All present?"}
+    S1_OK -->|Yes| S2
+    S1_OK -->|No| S1_INSTALL{"Install missing?\nrequires sudo"}
+    S1_INSTALL -->|Yes| S1_DO["Install packages"] --> S1_VERIFY{"Install OK?"}
+    S1_INSTALL -->|No| ABORT(["Aborted"])
+    S1_VERIFY -->|Yes| S2
+    S1_VERIFY -->|No| FAIL_DEP(["Installation failed\nShow error + apt command"])
+
+    S2["Step 2 OAuth Credentials\nCheck rclone.conf for existing\nGoogle Drive client_id/secret"]
+    S2 --> S2_FOUND{"Credentials found?"}
+    S2_FOUND -->|Yes| S2_REUSE{"Reuse or enter new?"}
+    S2_FOUND -->|No| S2_NEW["Show help links\nAsk for Client ID + Secret"]
+    S2_REUSE -->|Reuse| S3
+    S2_REUSE -->|New| S2_NEW
+    S2_NEW --> S2_VALIDATE{"Valid?"}
+    S2_VALIDATE -->|Yes| S3
+    S2_VALIDATE -->|No| S2_ERR["Show: field is required"] --> S2_NEW
+
+    S3["Step 3 Drive Folder"]
+    S3 --> S3_CHOICE{"Enter existing ID\nor create new?"}
+    S3_CHOICE -->|Existing| S3_ID["Ask for Folder ID"]
+    S3_CHOICE -->|Create| S3_CREATE["Ask folder name\nOAuth browser flow\nrclone mkdir\nRetrieve folder ID"]
+    S3_ID --> S4
+    S3_CREATE --> S3_CREATE_OK{"Success?"}
+    S3_CREATE_OK -->|Yes| S4
+    S3_CREATE_OK -->|No| FAIL_FOLDER(["Failed to create folder\nShow error + debug steps"])
+
+    S4["Step 4 Local Folder\nAsk path, check if exists"]
+    S4 --> S5["Step 5 Config Name\nAsk name, check uniqueness"]
+    S5 --> S6["Step 6 Sync Schedule\nPick cron interval"]
+    S6 --> S7["Step 7 Summary\nShow all settings\nList what will be done"]
+    S7 --> S7_CONFIRM{"Proceed?"}
+    S7_CONFIRM -->|No| ABORT
+    S7_CONFIRM -->|Yes| S8
+
+    S8["Step 8 Execute"]
+    S8 --> E1["1/6 Prepare local dir"]
+    E1 --> E2["2/6 Configure rclone remote\nskip if created in Step 3"]
+    E2 --> E3["3/6 Verify Drive connection"]
+    E3 --> E3_OK{"Connected?"}
+    E3_OK -->|Yes| E4["4/6 Initial sync Drive to Local"]
+    E3_OK -->|No| FAIL_CONN(["Connection failed\nShow causes + debug commands\nClean up remote"])
+    E4 --> E5["5/6 Establish bisync baseline"]
+    E5 --> E6["6/6 Watcher + systemd + cron"]
+    E6 --> DONE(["Setup complete!\nShow monitor + status commands"])
+
+    style START fill:#1f6feb,stroke:#58a6ff,color:#fff
+    style DONE fill:#238636,stroke:#3fb950,color:#fff
+    style ABORT fill:#6e7681,stroke:#8b949e,color:#fff
+    style FAIL_DEP fill:#da3633,stroke:#f85149,color:#fff
+    style FAIL_FOLDER fill:#da3633,stroke:#f85149,color:#fff
+    style FAIL_CONN fill:#da3633,stroke:#f85149,color:#fff
+    style DRY_BANNER fill:#9e6a03,stroke:#d29922,color:#fff
+</div>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2>Step Details</h2>
+
+<div class="step-grid">
+
+<div class="step-card">
+  <h4>Step 1 — Dependencies</h4>
+  <p>Check each tool, show ✓/✗ inline with version. Only prompt for sudo if packages are missing. If all present, no confirmation needed.</p>
+</div>
+
+<div class="step-card">
+  <h4>Step 2 — OAuth Credentials</h4>
+  <p>Parse <code>rclone.conf</code> for existing Drive remotes. If found, show masked credentials and offer reuse. If not, show Google Console links and ask for input.</p>
+</div>
+
+<div class="step-card">
+  <h4>Step 3 — Drive Folder</h4>
+  <p>Enter existing folder ID, or create a new folder. Creation triggers early OAuth + rclone mkdir + ID retrieval. Sets flag to skip re-auth in Step 8.</p>
+</div>
+
+<div class="step-card">
+  <h4>Step 4 — Local Folder</h4>
+  <p>Ask for path. If it exists, show item count. If not, note it will be created. Validate non-empty.</p>
+</div>
+
+<div class="step-card">
+  <h4>Step 5 — Config Name</h4>
+  <p>Letters, numbers, hyphens. Check for collisions. Offer overwrite/rename/abort on conflict.</p>
+</div>
+
+<div class="step-card">
+  <h4>Step 6 — Sync Schedule</h4>
+  <p>Explain what this controls (remote → local polling). Presets for 1/5/10/15 min + custom cron.</p>
+</div>
+
+<div class="step-card">
+  <h4>Step 7 — Summary</h4>
+  <p>Show everything. List what will happen (rclone, systemd, cron). Single confirm before execution. Mention sudo requirement here.</p>
+</div>
+
+<div class="step-card">
+  <h4>Step 8 — Execute</h4>
+  <p>Numbered sub-steps [1/6]–[6/6] with ✓/✗ result each. Errors show cause + debug command. Final status with monitor/status commands.</p>
+</div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2>Credential Detection Flow</h2>
+
+<div class="mermaid">
+flowchart LR
+    A{"rclone installed?"} -->|No| NONE["No credentials\nask user"]
+    A -->|Yes| B{"rclone.conf exists?"}
+    B -->|No| NONE
+    B -->|Yes| C["Parse sections\nfor type = drive"]
+    C --> D{"Found drive remote\nwith client_id?"}
+    D -->|No| NONE
+    D -->|Yes| FOUND["Return:\nremote name\nclient_id\nclient_secret"]
+
+    style NONE fill:#6e7681,stroke:#8b949e,color:#fff
+    style FOUND fill:#238636,stroke:#3fb950,color:#fff
+</div>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2>Terminal Output Examples</h2>
+
+<h3>Step 1 — All Dependencies Present</h3>
+<div class="terminal"><span class="bold info">══ Step 1/7 — Checking Dependencies</span>
+
+  curl         <span class="ok">✓</span> 8.5.0
+  rclone       <span class="ok">✓</span> v1.68.2 (>= 1.62.0)
+  inotifywait  <span class="ok">✓</span> present
+  systemd      <span class="ok">✓</span> present
+
+  <span class="ok">All dependencies satisfied.</span></div>
+
+<h3>Step 1 — Missing Packages</h3>
+<div class="terminal"><span class="bold info">══ Step 1/7 — Checking Dependencies</span>
+
+  curl         <span class="ok">✓</span> 8.5.0
+  rclone       <span class="err">✗</span> not installed
+  inotifywait  <span class="err">✗</span> not installed
+  systemd      <span class="ok">✓</span> present
+
+  Missing packages will be installed (requires sudo).
+  You may be prompted for your password.
+
+  <span class="bold">Continue? [y/N]</span></div>
+
+<h3>Step 2 — Existing Credentials Found</h3>
+<div class="terminal"><span class="bold info">══ Step 2/7 — Google OAuth Credentials</span>
+
+  Found existing Google Drive credentials (from remote <span class="bold">"my-drive"</span>):
+    Client ID     : <span class="dim">1069449091950-mef0p1...r8j.apps.googleusercontent.com</span>
+    Client Secret : <span class="dim">GOCSPX-...F5Q83</span>
+
+  1) Reuse these credentials
+  2) Enter new credentials
+
+  <span class="bold">Choice [1]:</span></div>
+
+<h3>Step 2 — No Credentials Found</h3>
+<div class="terminal"><span class="bold info">══ Step 2/7 — Google OAuth Credentials</span>
+
+  No existing Google Drive credentials found.
+
+  You need a Client ID and Client Secret from Google Cloud Console:
+  <span class="cyan">https://console.cloud.google.com/apis/credentials</span>
+
+  For step-by-step instructions, see:
+  <span class="cyan">https://github.com/wahidlahlou/gdrive-sync#prerequisites</span>
+
+  <span class="bold">Google OAuth Client ID     :</span> _
+  <span class="bold">Google OAuth Client Secret :</span> _</div>
+
+<h3>Step 3 — Create New Folder (success)</h3>
+<div class="terminal"><span class="bold info">══ Step 3/7 — Google Drive Folder</span>
+
+  1) Enter an existing folder ID
+  2) Create a new folder on Google Drive
+
+  <span class="bold">Choice [1]:</span> 2
+
+  <span class="bold">New folder name on Google Drive :</span> MyProject
+
+  Authenticating with Google Drive...
+  A browser window will open for Google authorization.
+
+  <span class="ok">✓</span> Authenticated.
+  Creating folder 'MyProject' on Google Drive...
+  <span class="ok">✓</span> Created 'MyProject' — Folder ID: 1zHhqlwzdNxn9ItusU_Zft4KpkVR72ipE</div>
+
+<h3>Step 4 — Local Folder (exists)</h3>
+<div class="terminal"><span class="bold info">══ Step 4/7 — Local Folder</span>
+
+  <span class="bold">Local folder path :</span> ~/Documents/drive-sync
+
+  <span class="ok">✓</span> Directory exists (12 items — existing files will be included in first sync).</div>
+
+<h3>Step 4 — Local Folder (new)</h3>
+<div class="terminal"><span class="bold info">══ Step 4/7 — Local Folder</span>
+
+  <span class="bold">Local folder path :</span> ~/Documents/new-project
+
+  Directory does not exist — it will be created during setup.</div>
+
+<h3>Step 5 — Config Name</h3>
+<div class="terminal"><span class="bold info">══ Step 5/7 — Config Name</span>
+
+  This name identifies the sync. Used for service name, log file, and config file.
+
+  <span class="bold">Config name (letters, numbers, hyphens) :</span> my-sync</div>
+
+<h3>Step 6 — Sync Schedule</h3>
+<div class="terminal"><span class="bold info">══ Step 6/7 — Sync Schedule (Drive → Local)</span>
+
+  Local changes push to Drive within ~5 seconds (via file watcher).
+  This schedule controls how often remote Drive changes are pulled down.
+
+  1) Every 5 min (recommended)
+  2) Every 10 min
+  3) Every 15 min
+  4) Every 1 min (heavy on API quota)
+  5) Custom cron expression
+
+  <span class="bold">Choice [1]:</span></div>
+
+<h3>Step 7 — Summary</h3>
+<div class="terminal"><span class="bold info">══ Step 7/7 — Review &amp; Confirm</span>
+
+  Config name      : my-sync
+  Local folder     : /home/user/Documents/drive-sync
+  Drive Folder ID  : 1zHhqlwzdNxn9ItusU_Zft4KpkVR72ipE
+  Sync schedule    : */5 * * * * (every 5 min)
+  Log file         : /home/user/gdrive-sync-my-sync.log
+
+  This will:
+    <span class="dim">•</span> Configure rclone remote with Google Drive
+    <span class="dim">•</span> Download existing files from Drive to local folder
+    <span class="dim">•</span> Create a systemd service <span class="dim">(requires sudo)</span>
+    <span class="dim">•</span> Set up a cron job for periodic sync
+
+  <span class="bold">Proceed? [y/N]</span></div>
+
+<h3>Step 8 — Execution (success)</h3>
+<div class="terminal">  [1/6] Preparing local directory...
+        <span class="ok">✓</span> Created /home/user/Documents/drive-sync
+
+  [2/6] Configuring rclone remote...
+        A browser window will open for Google authorization.
+        <span class="ok">✓</span> Remote 'my-sync' configured.
+
+  [3/6] Verifying Drive connection...
+        <span class="ok">✓</span> Connected to Google Drive.
+
+  [4/6] Initial sync: Drive → Local...
+        <span class="ok">✓</span> Initial download complete.
+
+  [5/6] Establishing bisync baseline...
+        <span class="ok">✓</span> Bisync baseline established.
+
+  [6/6] Setting up watcher, service, and cron...
+        <span class="ok">✓</span> Watcher script created.
+        <span class="ok">✓</span> Service 'gdrive-sync-my-sync' started and enabled.
+        <span class="ok">✓</span> Cron job active: */5 * * * *
+        <span class="ok">✓</span> Config saved.
+
+  <span class="dim">────────────────────────────────────</span>
+
+  <span class="ok bold">✓ Setup complete! 'my-sync' is now syncing.</span>
+
+    Monitor : tail -f /home/user/gdrive-sync-my-sync.log
+    Status  : sudo systemctl status gdrive-sync-my-sync</div>
+
+<h3>Step 8 — Connection Error</h3>
+<div class="terminal">  [3/6] Verifying Drive connection...
+        <span class="err">✗</span> Cannot access Google Drive folder.
+
+        Possible causes:
+          <span class="dim">•</span> The Folder ID is incorrect
+          <span class="dim">•</span> OAuth token expired — try: <span class="cyan">rclone config reconnect my-sync:</span>
+          <span class="dim">•</span> Network issue — check your internet connection
+
+        Setup aborted. The rclone remote has been removed.</div>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2>Folder Creation Sub-flow</h2>
+
+<div class="mermaid">
+flowchart TD
+    A["User picks Create new folder"] --> B["Ask for folder name"]
+    B --> C["Create rclone remote\nno root_folder_id\ntriggers OAuth browser flow"]
+    C --> C_OK{"Auth success?"}
+    C_OK -->|No| FAIL(["Auth failed\nClean up remote"])
+    C_OK -->|Yes| D["rclone mkdir remote:FolderName"]
+    D --> D_OK{"Created?"}
+    D_OK -->|No| FAIL2(["mkdir failed\nClean up remote"])
+    D_OK -->|Yes| E["rclone lsf remote:\ndirs-only format ip\nextract folder ID"]
+    E --> E_OK{"Got ID?"}
+    E_OK -->|No| FAIL3(["Could not retrieve ID\nClean up, suggest manual entry"])
+    E_OK -->|Yes| F["rclone config update\nadd root_folder_id"]
+    F --> G["Set REMOTE_ALREADY_CONFIGURED=1\nReturn folder ID"]
+
+    style FAIL fill:#da3633,stroke:#f85149,color:#fff
+    style FAIL2 fill:#da3633,stroke:#f85149,color:#fff
+    style FAIL3 fill:#da3633,stroke:#f85149,color:#fff
+    style G fill:#238636,stroke:#3fb950,color:#fff
+</div>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2>Edge Cases</h2>
+
+<table>
+  <thead>
+    <tr><th>Scenario</th><th>Handling</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>rclone not installed, user picks "Create folder"</td><td>Step 1 installs rclone first; folder creation works in Step 3</td></tr>
+    <tr><td>Same OAuth credentials for multiple syncs</td><td>Detected from first Drive remote and offered for reuse</td></tr>
+    <tr><td>Folder name with spaces</td><td>Supported — rclone handles them; quoted in all commands</td></tr>
+    <tr><td>Config name collision</td><td>Prompt: overwrite / rename / abort</td></tr>
+    <tr><td>rclone token expired during execution</td><td>Step 8 [3/6] fails → show reconnect command</td></tr>
+    <tr><td>Network down during folder creation</td><td>rclone mkdir fails → error + debug guidance</td></tr>
+    <tr><td>User cancels OAuth browser flow</td><td>rclone config create fails → error + cleanup</td></tr>
+    <tr><td>Dry-run mode</td><td>All input collected normally; execution shows [dry-run] prefixed messages</td></tr>
+    <tr><td>rclone version too old</td><td>Step 1 shows ⚠ with version + offers upgrade</td></tr>
+    <tr><td>Running as root</td><td>Sudo check skipped; still works</td></tr>
+  </tbody>
+</table>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      primaryColor: '#1f6feb',
+      primaryTextColor: '#c9d1d9',
+      lineColor: '#30363d',
+      secondaryColor: '#161b22',
+      tertiaryColor: '#21262d',
+      fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, sans-serif',
+      fontSize: '14px'
+    },
+    flowchart: { curve: 'basis', padding: 15 }
+  });
+</script>
+
+</body>
+</html>
