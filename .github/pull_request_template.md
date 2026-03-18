@@ -8,7 +8,7 @@ Brief description of the changes.
 
 ## Testing
 
-- [ ] `bash test_gdrive_sync.sh` passes
+- [ ] `bash tests/test-gdrive-sync.sh` passes
 - [ ] `bash -n gdrive-sync.sh` (syntax check) passes
 - [ ] Tested manually with a real Google Drive folder (if applicable)
 

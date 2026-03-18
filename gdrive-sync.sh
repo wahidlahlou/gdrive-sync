@@ -10,7 +10,7 @@
 #  License: MIT
 # ============================================================
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 
 # ----- Strict mode (without errexit — we handle errors ourselves) ----------
 set -o pipefail
@@ -44,6 +44,37 @@ confirm() {
 step_header() { echo -e "\n${BOLD}${BLUE}══ Step $1 — $2${NC}\n"; }
 
 pause() { echo ""; read -rp "Press Enter to continue..."; }
+
+# Run a command with a spinner. Usage: spin "message" command [args...]
+spin() {
+  local msg="$1"; shift
+  local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+  local tmp; tmp=$(mktemp)
+
+  "$@" &>"$tmp" &
+  local pid=$!
+  local i=0
+
+  # Hide cursor
+  tput civis 2>/dev/null || true
+  while kill -0 "$pid" 2>/dev/null; do
+    printf "\r  ${CYAN}%s${NC} %s" "${frames[i++ % ${#frames[@]}]}" "$msg"
+    sleep 0.1
+  done
+
+  wait "$pid"
+  local rc=$?
+  # Show cursor, clear line
+  tput cnorm 2>/dev/null || true
+  printf "\r\033[K"
+
+  # On failure, show captured output
+  if [[ $rc -ne 0 ]]; then
+    cat "$tmp"
+  fi
+  rm -f "$tmp"
+  return $rc
+}
 
 # ----- Mask a string: show first N and last M chars, middle is dots --------
 mask_value() {
@@ -211,35 +242,69 @@ done
 #  CREDENTIAL DETECTION
 # ===================================================================
 
+# Populates DETECTED_CREDS array: each entry is "source|client_id|client_secret"
+# Returns 0 if at least one credential set was found.
 detect_drive_credentials() {
-  command -v rclone &>/dev/null || return 1
-  [[ -f "$RCLONE_CONF" ]] || return 1
+  DETECTED_CREDS=()
+  local seen=()  # track unique client_id values to avoid duplicates
 
-  local current_remote="" found_drive=false
-  DETECTED_CLIENT_ID=""
-  DETECTED_CLIENT_SECRET=""
-  DETECTED_REMOTE_NAME=""
-
-  while IFS= read -r line; do
-    if [[ "$line" =~ ^\[([^]]+)\]$ ]]; then
-      current_remote="${BASH_REMATCH[1]}"
-      found_drive=false
-      DETECTED_CLIENT_ID=""
-      DETECTED_CLIENT_SECRET=""
-    elif [[ "$line" =~ ^type\ =\ drive$ ]]; then
-      found_drive=true
-    elif [[ "$found_drive" == "true" && "$line" =~ ^client_id\ =\ (.+)$ ]]; then
-      DETECTED_CLIENT_ID="${BASH_REMATCH[1]}"
-    elif [[ "$found_drive" == "true" && "$line" =~ ^client_secret\ =\ (.+)$ ]]; then
-      DETECTED_CLIENT_SECRET="${BASH_REMATCH[1]}"
+  # 1) Search gdrive-sync .env config files
+  for f in "${SYNC_DIR}"/*.env; do
+    [[ -f "$f" ]] || continue
+    local cfg_cid="" cfg_csec="" cfg_name=""
+    cfg_name="$(basename "$f" .env)"
+    while IFS='=' read -r key val; do
+      val="${val#\"}" ; val="${val%\"}"
+      case "$key" in
+        CLIENT_ID)     cfg_cid="$val" ;;
+        CLIENT_SECRET) cfg_csec="$val" ;;
+      esac
+    done < "$f"
+    if [[ -n "$cfg_cid" && -n "$cfg_csec" ]]; then
+      local dup=false
+      for s in "${seen[@]+"${seen[@]}"}"; do [[ "$s" == "$cfg_cid" ]] && dup=true; done
+      if [[ "$dup" == "false" ]]; then
+        DETECTED_CREDS+=("config:${cfg_name}|${cfg_cid}|${cfg_csec}")
+        seen+=("$cfg_cid")
+      fi
     fi
+  done
 
-    if [[ "$found_drive" == "true" && -n "$DETECTED_CLIENT_ID" && -n "$DETECTED_CLIENT_SECRET" ]]; then
-      DETECTED_REMOTE_NAME="$current_remote"
-      return 0
+  # 2) Fall back to rclone.conf if no config credentials found
+  if [[ ${#DETECTED_CREDS[@]} -eq 0 && -f "${RCLONE_CONF:-}" ]]; then
+    local current_remote="" found_drive=false cid="" csec=""
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^\[([^]]+)\]$ ]]; then
+        # Save previous remote if complete
+        if [[ "$found_drive" == "true" && -n "$cid" && -n "$csec" ]]; then
+          local dup=false
+          for s in "${seen[@]+"${seen[@]}"}"; do [[ "$s" == "$cid" ]] && dup=true; done
+          if [[ "$dup" == "false" ]]; then
+            DETECTED_CREDS+=("rclone:${current_remote}|${cid}|${csec}")
+            seen+=("$cid")
+          fi
+        fi
+        current_remote="${BASH_REMATCH[1]}"
+        found_drive=false; cid=""; csec=""
+      elif [[ "$line" =~ ^type\ =\ drive$ ]]; then
+        found_drive=true
+      elif [[ "$found_drive" == "true" && "$line" =~ ^client_id\ =\ (.+)$ ]]; then
+        cid="${BASH_REMATCH[1]}"
+      elif [[ "$found_drive" == "true" && "$line" =~ ^client_secret\ =\ (.+)$ ]]; then
+        csec="${BASH_REMATCH[1]}"
+      fi
+    done < "$RCLONE_CONF"
+    # Don't forget the last remote
+    if [[ "$found_drive" == "true" && -n "$cid" && -n "$csec" ]]; then
+      local dup=false
+      for s in "${seen[@]+"${seen[@]}"}"; do [[ "$s" == "$cid" ]] && dup=true; done
+      if [[ "$dup" == "false" ]]; then
+        DETECTED_CREDS+=("rclone:${current_remote}|${cid}|${csec}")
+      fi
     fi
-  done < "$RCLONE_CONF"
-  return 1
+  fi
+
+  [[ ${#DETECTED_CREDS[@]} -gt 0 ]]
 }
 
 # ===================================================================
@@ -343,15 +408,13 @@ check_dependencies_step() {
 
       # Install missing packages
       if ! command -v curl &>/dev/null; then
-        info "Installing curl..."
-        $SUDO apt-get update -qq && $SUDO apt-get install -y curl
+        spin "Installing curl..." bash -c "$SUDO apt-get update -qq && $SUDO apt-get install -y curl"
       fi
       if ! command -v rclone &>/dev/null; then
         install_rclone
       fi
       if ! command -v inotifywait &>/dev/null; then
-        info "Installing inotify-tools..."
-        $SUDO apt-get update -qq && $SUDO apt-get install -y inotify-tools
+        spin "Installing inotify-tools..." bash -c "$SUDO apt-get update -qq && $SUDO apt-get install -y inotify-tools"
       fi
 
       # Verify
@@ -371,12 +434,15 @@ check_dependencies_step() {
 
 save_config() {
   local name="$1" remote="$2" local_dir="$3" folder_id="$4" cron="$5"
+  local cid="${6:-}" csec="${7:-}"
   cat > "${SYNC_DIR}/${name}.env" <<EOF
 # gdrive-sync config — do not edit manually unless you know what you're doing
 REMOTE_NAME="${remote}"
 LOCAL_DIR="${local_dir}"
 FOLDER_ID="${folder_id}"
 CRON_SCHEDULE="${cron}"
+CLIENT_ID="${cid}"
+CLIENT_SECRET="${csec}"
 CREATED="$(date -Iseconds)"
 EOF
 }
@@ -559,9 +625,8 @@ create_drive_folder() {
   fi
 
   echo -e "  ${GREEN}✓${NC} Authenticated."
-  echo -e "  Creating folder '${folder_name}' on Google Drive..."
 
-  if ! rclone mkdir "${remote_name}:${folder_name}" 2>&1; then
+  if ! spin "Creating folder '${folder_name}' on Drive..." rclone mkdir "${remote_name}:${folder_name}"; then
     echo -e "  ${RED}✗${NC} Failed to create folder on Google Drive."
     echo -e "    Check your internet connection and try again."
     rclone config delete "$remote_name" 2>/dev/null || true
@@ -615,28 +680,53 @@ action_add() {
   local client_id client_secret
 
   if detect_drive_credentials; then
-    echo -e "  Found existing Google Drive credentials (from remote ${BOLD}\"${DETECTED_REMOTE_NAME}\"${NC}):"
-    echo -e "    Client ID     : ${DIM}$(mask_value "$DETECTED_CLIENT_ID")${NC}"
-    echo -e "    Client Secret : ${DIM}$(mask_value "$DETECTED_CLIENT_SECRET")${NC}"
-    echo ""
-    echo "  1) Reuse these credentials"
-    echo "  2) Enter new credentials"
-    echo ""
-    local cred_choice
-    read -rp "$(echo -e "  ${BOLD}Choice [1]:${NC} ")" cred_choice
+    local n_creds=${#DETECTED_CREDS[@]}
 
-    case "${cred_choice:-1}" in
-      2) ;; # fall through to manual entry below
-      *)
-        client_id="$DETECTED_CLIENT_ID"
-        client_secret="$DETECTED_CLIENT_SECRET"
-        ;;
-    esac
+    if [[ $n_creds -eq 1 ]]; then
+      # Single credential set — simple reuse prompt
+      local src cid csec
+      IFS='|' read -r src cid csec <<< "${DETECTED_CREDS[0]}"
+      echo -e "  Found existing credentials (from ${BOLD}${src}${NC}):"
+      echo -e "    Client ID     : ${DIM}$(mask_value "$cid")${NC}"
+      echo -e "    Client Secret : ${DIM}$(mask_value "$csec")${NC}"
+      echo ""
+      echo "  1) Reuse these credentials"
+      echo "  2) Enter new credentials"
+      echo ""
+      local cred_choice
+      read -rp "$(echo -e "  ${BOLD}Choice [1]:${NC} ")" cred_choice
+      case "${cred_choice:-1}" in
+        2) ;;
+        *) client_id="$cid"; client_secret="$csec" ;;
+      esac
+    else
+      # Multiple credential sets found
+      echo -e "  Found ${BOLD}${n_creds}${NC} existing credential sets:"
+      echo ""
+      local i=1
+      for entry in "${DETECTED_CREDS[@]}"; do
+        local src cid csec
+        IFS='|' read -r src cid csec <<< "$entry"
+        echo -e "  ${i}) ${BOLD}${src}${NC}  —  ID: ${DIM}$(mask_value "$cid")${NC}"
+        ((i++))
+      done
+      echo -e "  ${i}) Enter new credentials"
+      echo ""
+      local cred_choice
+      read -rp "$(echo -e "  ${BOLD}Choice [1]:${NC} ")" cred_choice
+      cred_choice="${cred_choice:-1}"
+
+      if [[ "$cred_choice" =~ ^[0-9]+$ && "$cred_choice" -ge 1 && "$cred_choice" -le "$n_creds" ]]; then
+        local src cid csec
+        IFS='|' read -r src cid csec <<< "${DETECTED_CREDS[$((cred_choice - 1))]}"
+        client_id="$cid"; client_secret="$csec"
+      fi
+    fi
   fi
 
   if [[ -z "${client_id:-}" ]]; then
     # No credentials detected or user chose to enter new ones
-    if [[ -z "${DETECTED_CLIENT_ID:-}" ]]; then
+    if [[ ${#DETECTED_CREDS[@]} -eq 0 ]]; then
       echo -e "  No existing Google Drive credentials found."
       echo ""
     fi
@@ -724,14 +814,21 @@ action_add() {
 
   echo ""
   if [[ -d "$local_dir" ]]; then
-    local fc; fc=$(find "$local_dir" -maxdepth 1 -not -name '.' | wc -l)
+    local fc; fc=$(find "$local_dir" -maxdepth 1 -mindepth 1 | wc -l)
     if [[ $fc -gt 0 ]]; then
       echo -e "  ${GREEN}✓${NC} Directory exists (${fc} items — existing files will be included in first sync)."
     else
       echo -e "  ${GREEN}✓${NC} Directory exists and is empty."
     fi
   else
-    echo -e "  Directory does not exist — it will be created during setup."
+    local parent_dir; parent_dir="$(dirname "$local_dir")"
+    if [[ ! -d "$parent_dir" ]]; then
+      warn "Neither '${local_dir}' nor its parent directory exist."
+      echo -e "  This may indicate a typo in the path."
+    else
+      echo -e "  ${YELLOW}⚠${NC}  Directory does not exist — it will be created during setup."
+    fi
+    confirm "  Create '${local_dir}'?" || { echo ""; info "Aborted."; return; }
   fi
 
   # ── Step 6: Sync Schedule ────────────────────────────────────────
@@ -762,7 +859,7 @@ action_add() {
   # ── Determine initial sync situation ───────────────────────────────
   local local_has_files=false drive_is_new=false
   if [[ -d "$local_dir" ]]; then
-    local lfc; lfc=$(find "$local_dir" -maxdepth 1 -not -name '.' | wc -l)
+    local lfc; lfc=$(find "$local_dir" -maxdepth 1 -mindepth 1 | wc -l)
     [[ $lfc -gt 0 ]] && local_has_files=true
   fi
   [[ "$REMOTE_ALREADY_CONFIGURED" == "1" ]] && drive_is_new=true
@@ -872,7 +969,7 @@ action_add() {
   if [[ "$DRY_RUN" == "1" ]]; then
     echo -e "        ${YELLOW}[dry-run]${NC} Skipping Drive verification."
   else
-    if rclone lsd "${remote_name}:" &>/dev/null || rclone ls "${remote_name}:" &>/dev/null; then
+    if spin "Verifying Drive connection..." bash -c "rclone lsd '${remote_name}:' &>/dev/null || rclone ls '${remote_name}:' &>/dev/null"; then
       echo -e "        ${GREEN}✓${NC} Connected to Google Drive."
     else
       echo ""
@@ -899,7 +996,7 @@ action_add() {
       if [[ "$DRY_RUN" == "1" ]]; then
         echo -e "        ${YELLOW}[dry-run]${NC} Skipping initial download."
       else
-        rclone copy "${remote_name}:" "$local_dir" $rv --stats-one-line -q
+        spin "Downloading Drive files..." rclone copy "${remote_name}:" "$local_dir" $rv --stats-one-line -q
         echo -e "        ${GREEN}✓${NC} Drive files downloaded to local."
       fi
       ;;
@@ -908,7 +1005,7 @@ action_add() {
       if [[ "$DRY_RUN" == "1" ]]; then
         echo -e "        ${YELLOW}[dry-run]${NC} Skipping initial upload."
       else
-        rclone copy "$local_dir" "${remote_name}:" $rv --stats-one-line -q
+        spin "Uploading local files..." rclone copy "$local_dir" "${remote_name}:" $rv --stats-one-line -q
         echo -e "        ${GREEN}✓${NC} Local files uploaded to Drive."
       fi
       ;;
@@ -929,7 +1026,7 @@ action_add() {
     echo -e "        ${YELLOW}[dry-run]${NC} Skipping bisync baseline."
   else
     rm -rf ~/.cache/rclone/bisync/*"${remote_name}"* 2>/dev/null || true
-    rclone bisync "$local_dir" "${remote_name}:" --resync \
+    spin "Establishing bisync baseline..." rclone bisync "$local_dir" "${remote_name}:" --resync \
       --conflict-resolve newer --conflict-loser num \
       $rv --stats-one-line -q
     echo -e "        ${GREEN}✓${NC} Bisync baseline established."
@@ -969,10 +1066,10 @@ ProtectHome=false
 [Install]
 WantedBy=multi-user.target
 UNIT
-    $SUDO systemctl daemon-reload
+    spin "Reloading systemd..." $SUDO systemctl daemon-reload
     $SUDO systemctl enable "$service_name" &>/dev/null
 
-    if $SUDO systemctl start "$service_name"; then
+    if spin "Starting service..." $SUDO systemctl start "$service_name"; then
       echo -e "        ${GREEN}✓${NC} Service '${service_name}' started and enabled."
     else
       echo -e "        ${YELLOW}⚠${NC} Service '${service_name}' failed to start."
@@ -985,7 +1082,7 @@ UNIT
     echo -e "        ${GREEN}✓${NC} Cron job active: ${cron_schedule}"
 
     # Save config
-    save_config "$remote_name" "$remote_name" "$local_dir" "$folder_id" "$cron_schedule"
+    save_config "$remote_name" "$remote_name" "$local_dir" "$folder_id" "$cron_schedule" "$client_id" "$client_secret"
     echo -e "        ${GREEN}✓${NC} Config saved."
   fi
 
@@ -1052,9 +1149,14 @@ action_status() {
       || echo -e "    Cron    : ${RED}● NOT FOUND${NC}"
 
     local log_file="$HOME/gdrive-sync-${name}.log"
-    [[ -f "$log_file" ]] && echo -e "    Last log: ${DIM}$(tail -1 "$log_file" 2>/dev/null | head -c 80)${NC}"
+    if [[ -f "$log_file" ]]; then
+      local last_line; last_line=$(grep -a '.' "$log_file" 2>/dev/null | tail -1 | head -c 80)
+      [[ -n "$last_line" ]] \
+        && echo -e "    Last log: ${DIM}${last_line}${NC}" \
+        || echo -e "    Last log: ${DIM}(empty)${NC}"
+    fi
 
-    rclone lsd "${REMOTE_NAME}:" --max-depth 0 &>/dev/null 2>&1 \
+    spin "Checking Drive..." rclone lsd "${REMOTE_NAME}:" --max-depth 0 \
       && echo -e "    Drive   : ${GREEN}● OK${NC}" \
       || echo -e "    Drive   : ${RED}● UNREACHABLE${NC}"
 
@@ -1111,7 +1213,7 @@ action_edit() {
       fi
       ;;
   esac
-  save_config "$name" "$REMOTE_NAME" "$LOCAL_DIR" "$new_folder" "$new_cron"
+  save_config "$name" "$REMOTE_NAME" "$LOCAL_DIR" "$new_folder" "$new_cron" "${CLIENT_ID:-}" "${CLIENT_SECRET:-}"
   success "Configuration saved."
 }
 
@@ -1242,29 +1344,30 @@ action_test_drive() {
     || { err "Remote '${REMOTE_NAME}' not found."; return 1; }
 
   # Auth + list
-  info "Checking authentication..."
-  local list_out
-  if list_out=$(rclone lsd "${REMOTE_NAME}:" 2>&1); then
+  local list_out list_tmp; list_tmp=$(mktemp)
+  if spin "Checking authentication..." bash -c "rclone lsd '${REMOTE_NAME}:' >'$list_tmp' 2>&1"; then
+    list_out=$(<"$list_tmp"); rm -f "$list_tmp"
     success "Authentication OK — folder is accessible."
     if [[ "$VERBOSE" == "1" && -n "$list_out" ]]; then
       echo -e "  ${DIM}Subdirectories:${NC}"
       echo "$list_out" | head -10 | sed 's/^/    /'
     fi
-  elif rclone ls "${REMOTE_NAME}:" --max-depth 1 &>/dev/null; then
+  elif spin "Trying file listing..." rclone ls "${REMOTE_NAME}:" --max-depth 1; then
+    rm -f "$list_tmp"
     success "Authentication OK — folder has files (no subdirs)."
   else
+    rm -f "$list_tmp"
     err "Cannot access Drive folder. Token may be expired."
     echo -e "  ${DIM}Try: rclone config reconnect ${REMOTE_NAME}:${NC}"
     all_ok=false
   fi
 
   # Write test
-  info "Testing write access..."
   local tf="/tmp/gdrive-sync-writetest-$$.txt"
   echo "gdrive-sync write test $(date -Iseconds)" > "$tf"
-  if rclone copyto "$tf" "${REMOTE_NAME}:.gdrive-sync-test" 2>/dev/null; then
+  if spin "Testing write access..." rclone copyto "$tf" "${REMOTE_NAME}:.gdrive-sync-test"; then
     success "Write access OK."
-    rclone deletefile "${REMOTE_NAME}:.gdrive-sync-test" 2>/dev/null || true
+    spin "Cleaning up test file..." rclone deletefile "${REMOTE_NAME}:.gdrive-sync-test"
   else
     warn "Write test failed — folder may be read-only."
     all_ok=false
@@ -1318,7 +1421,7 @@ action_settings() {
 
 action_run_tests() {
   local test_script
-  test_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tests/test_gdrive_sync.sh"
+  test_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tests/test-gdrive-sync.sh"
 
   if [[ ! -f "$test_script" ]]; then
     err "Test script not found: $test_script"

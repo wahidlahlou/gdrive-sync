@@ -19,19 +19,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ./gdrive-sync.sh -v             # Verbose mode
 
 # Tests
-bash test_gdrive_sync.sh            # Run full test suite (60+ tests)
-bash test_gdrive_sync.sh -v         # Verbose test output
-bash test_gdrive_sync.sh test_name  # Run single test by name filter
+bash tests/test-gdrive-sync.sh            # Run full test suite (60+ tests)
+bash tests/test-gdrive-sync.sh -v         # Verbose test output
+bash tests/test-gdrive-sync.sh test_name  # Run single test by name filter
 ./gdrive-sync.sh --test             # Run tests via main script
 ```
 
-There is no build, lint, or format step. Tests optionally run `shellcheck` if installed.
+There is no build, lint, or format step. The test suite will offer to install `shellcheck` if it's not found.
 
 ## Architecture
 
 ### Single-file design
 
-Everything lives in `gdrive-sync.sh`. The only other source file is `test_gdrive_sync.sh`.
+Everything lives in `gdrive-sync.sh`. The only other source file is `tests/test-gdrive-sync.sh`.
 
 ### Sync mechanism
 
@@ -42,7 +42,7 @@ Everything lives in `gdrive-sync.sh`. The only other source file is `test_gdrive
 ### Runtime-generated files
 
 The script generates files at runtime, not checked into the repo:
-- `~/.config/gdrive-sync/<name>.env` — per-sync config (folder ID, cron schedule)
+- `~/.config/gdrive-sync/<name>.env` — per-sync config (folder ID, cron schedule, OAuth credentials)
 - `~/.config/gdrive-sync/<name>-watcher.sh` — generated inotify watcher script
 - `~/.config/gdrive-sync/settings.conf` — global defaults (debounce, log size, etc.)
 - `/etc/systemd/system/gdrive-sync-<name>.service` — systemd unit per sync
@@ -61,12 +61,12 @@ The script generates files at runtime, not checked into the repo:
 
 - **New action:** Create `action_foo()` + add case to the menu
 - **New CLI flag:** Add to CLI parsing section + `show_help()`
-- **New test:** Define `test_foo()` in `test_gdrive_sync.sh`
+- **New test:** Define `test_foo()` in `tests/test-gdrive-sync.sh`
 - **Modify watcher behavior:** Edit the heredoc in `generate_watcher_script()`
 
 ## Test framework
 
-Custom test framework in `test_gdrive_sync.sh` with:
+Custom test framework in `tests/test-gdrive-sync.sh` with:
 - Assertion functions: `assert_eq`, `assert_contains`, `assert_file_exists`, etc.
 - Per-test temp workspace via `setup_tmpdir()` / `teardown_tmpdir()`
 - Tests source `gdrive-sync.sh` with `GDRIVE_SYNC_TESTING=1` to avoid side effects
@@ -133,4 +133,4 @@ During development, add entries under `## [Unreleased]` at the top. On release, 
 GitHub Actions runs on every push/PR to `main`:
 - `bash -n gdrive-sync.sh` (syntax check)
 - `shellcheck` (lint)
-- `bash tests/test_gdrive_sync.sh` (test suite)
+- `bash tests/test-gdrive-sync.sh` (test suite)
