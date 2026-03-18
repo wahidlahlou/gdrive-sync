@@ -189,7 +189,7 @@ Choose **1) Add new sync** and paste your Client ID, Client Secret, and Folder I
 
 ```
   ┌─────────────────────────────────────────────┐
-  │   Google Drive Sync Manager  v1.1.0         │
+  │   Google Drive Sync Manager  v0.2.0         │
   │   rclone bisync + inotify-tools             │
   └─────────────────────────────────────────────┘
 
