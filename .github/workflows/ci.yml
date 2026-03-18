@@ -21,7 +21,4 @@ jobs:
           shellcheck gdrive-sync.sh || true
 
       - name: Run test suite
-        run: |
-          mkdir -p tests
-          cp test_gdrive_sync.sh tests/
-          bash tests/test_gdrive_sync.sh
+        run: bash tests/test-gdrive-sync.sh

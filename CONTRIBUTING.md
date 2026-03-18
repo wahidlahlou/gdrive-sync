@@ -36,7 +36,7 @@ git checkout -b docs/update-readme   # docs only
 ### 3. Make your changes
 
 - Edit `gdrive-sync.sh` (single-file design — everything lives here)
-- Add tests in `test_gdrive_sync.sh` if applicable
+- Add tests in `tests/test-gdrive-sync.sh` if applicable
 
 ### 4. Test locally
 
@@ -44,18 +44,14 @@ git checkout -b docs/update-readme   # docs only
 # Syntax check
 bash -n gdrive-sync.sh
 
-# Run test suite
-mkdir -p tests && cp test_gdrive_sync.sh tests/
-bash tests/test_gdrive_sync.sh
-
-# Optional: shellcheck
-shellcheck gdrive-sync.sh
+# Run test suite (will offer to install shellcheck if missing)
+bash tests/test-gdrive-sync.sh
 ```
 
 ### 5. Commit & push
 
 ```bash
-git add gdrive-sync.sh test_gdrive_sync.sh
+git add gdrive-sync.sh tests/test-gdrive-sync.sh
 git commit -m "Short description of what and why"
 git push origin feature/my-change
 ```
@@ -73,7 +69,7 @@ CI will automatically run syntax check, shellcheck, and the test suite on your P
 - Quote all variables, use `[[ ]]` for conditionals
 - Functions for menu actions: `action_*()` pattern
 - User-facing messages: use `echo -e` with color variables, not `info()`/`success()` in the setup wizard
-- Tests: define `test_*()` functions in `test_gdrive_sync.sh`
+- Tests: define `test_*()` functions in `tests/test-gdrive-sync.sh`
 
 ## Versioning
 

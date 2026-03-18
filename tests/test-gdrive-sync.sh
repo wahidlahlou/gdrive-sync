@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
 # ============================================================
-#  tests/test_gdrive_sync.sh
+#  tests/test-gdrive-sync.sh
 #  Test suite for gdrive-sync.sh
 #
-#  Run:  bash tests/test_gdrive_sync.sh
-#        bash tests/test_gdrive_sync.sh -v          (verbose)
-#        bash tests/test_gdrive_sync.sh test_name    (single test)
+#  Run:  bash tests/test-gdrive-sync.sh
+#        bash tests/test-gdrive-sync.sh -v          (verbose)
+#        bash tests/test-gdrive-sync.sh test_name    (single test)
 #
 #  Tests are self-contained — they create temp directories,
 #  mock external commands, and clean up after themselves.
@@ -798,8 +798,24 @@ main() {
   # Verify script exists
   if [[ ! -f "$(script_path)" ]]; then
     echo -e "${RED}ERROR: gdrive-sync.sh not found at $(script_path)${NC}"
-    echo "Run tests from the repo root: bash tests/test_gdrive_sync.sh"
+    echo "Run tests from the repo root: bash tests/test-gdrive-sync.sh"
     exit 1
+  fi
+
+  # Offer to install shellcheck if missing
+  if ! command -v shellcheck &>/dev/null; then
+    echo -e "${YELLOW}shellcheck is not installed.${NC}"
+    echo "  It's a static analysis tool that catches common bugs in shell scripts"
+    echo "  (unquoted variables, incorrect redirections, etc.)."
+    echo "  Without it, the shellcheck test will be skipped."
+    echo ""
+    read -rp "  Install shellcheck now? [y/N] " answer
+    if [[ "${answer,,}" == "y" ]]; then
+      echo ""
+      sudo apt-get install -y shellcheck && echo -e "${GREEN}shellcheck installed.${NC}" \
+        || echo -e "${RED}Installation failed — shellcheck test will be skipped.${NC}"
+      echo ""
+    fi
   fi
 
   # Collect all test functions
